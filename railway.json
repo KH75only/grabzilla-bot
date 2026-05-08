@@ -1,5 +1,5 @@
 {
-  "build": {"builder": "NIXPACKS"},
+  "build": {"builder": "RAILPACKS"},
   "deploy": {
     "startCommand": "python bot.py",
     "restartPolicyType": "ON_FAILURE"
