@@ -4,113 +4,110 @@
 # =============================================
 
 import os
-import re
 import uuid
 import yt_dlp
-
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 def detect_platform(url: str) -> str:
-    """Platformani aniqlash"""
-    url = url.lower()
-    if "instagram.com" in url:
+    u = url.lower()
+    if "instagram.com" in u:
         return "instagram"
-    elif "tiktok.com" in url or "vm.tiktok.com" in url:
+    elif "tiktok.com" in u or "vm.tiktok.com" in u or "vt.tiktok.com" in u:
         return "tiktok"
-    elif "youtube.com" in url or "youtu.be" in url:
+    elif "youtube.com" in u or "youtu.be" in u:
         return "youtube"
-    elif "twitter.com" in url or "x.com" in url:
+    elif "twitter.com" in u or "x.com" in u:
         return "twitter"
-    elif "facebook.com" in url or "fb.watch" in url:
+    elif "facebook.com" in u or "fb.watch" in u:
         return "facebook"
     else:
         return "unknown"
 
 
-def download_video(url: str, quality: str = None) -> dict:
-    """
-    Videoni yuklab olish.
-    Qaytaradi: {"success": True, "file": "path/to/file", "platform": "..."}
-    yoki: {"success": False, "error": "xato matni"}
-    """
-    platform = detect_platform(url)
+def _base_opts(file_id: str) -> dict:
+    return {
+        "outtmpl": os.path.join(DOWNLOAD_DIR, f"{file_id}.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "nocheckcertificate": True,
+        "merge_output_format": "mp4",
+    }
 
+
+def _find_file(file_id: str) -> str | None:
+    for f in os.listdir(DOWNLOAD_DIR):
+        if f.startswith(file_id):
+            return os.path.join(DOWNLOAD_DIR, f)
+    return None
+
+
+def download_video(url: str, quality: str = None) -> dict:
+    platform = detect_platform(url)
     if platform == "unknown":
         return {"success": False, "error": "unsupported"}
 
     file_id = str(uuid.uuid4())[:8]
-    output_template = os.path.join(DOWNLOAD_DIR, f"{file_id}.%(ext)s")
+    opts = _base_opts(file_id)
 
-    # yt-dlp sozlamalari
-    ydl_opts = {
-        "outtmpl": output_template,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-    }
-
-    # YouTube sifat tanlash
     if platform == "youtube":
         if quality == "mp3":
-            ydl_opts["format"] = "bestaudio/best"
-            ydl_opts["postprocessors"] = [{
+            opts["format"] = "bestaudio/best"
+            opts["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }]
+        elif quality == "240p":
+            opts["format"] = "bestvideo[height<=240][ext=mp4]+bestaudio[ext=m4a]/best[height<=240]"
         elif quality == "360p":
-            ydl_opts["format"] = "bestvideo[height<=360]+bestaudio/best[height<=360]/best[height<=360]"
+            opts["format"] = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]"
+        elif quality == "480p":
+            opts["format"] = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]"
         elif quality == "720p":
-            ydl_opts["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]"
+            opts["format"] = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
         elif quality == "1080p":
-            ydl_opts["format"] = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best[height<=1080]"
+            opts["format"] = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
         else:
-            ydl_opts["format"] = "best[height<=720]"
+            opts["format"] = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
 
-    # Instagram / TikTok / boshqalar
+    elif platform == "instagram":
+        opts["format"] = "best"
+        opts["http_headers"] = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15"
+        }
+
+    elif platform == "tiktok":
+        opts["format"] = "best"
+        opts["http_headers"] = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G975U) AppleWebKit/537.36"
+        }
+
     else:
-        ydl_opts["format"] = "best"
-        # Instagram uchun cookies (agar kerak bo'lsa)
-        # ydl_opts["cookiefile"] = "cookies.txt"
+        opts["format"] = "best"
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            # Yuklab olingan faylni topish
-            if quality == "mp3":
-                ext = "mp3"
-            else:
-                ext = info.get("ext", "mp4")
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.extract_info(url, download=True)
 
-            file_path = os.path.join(DOWNLOAD_DIR, f"{file_id}.{ext}")
+        file_path = _find_file(file_id)
+        if not file_path:
+            return {"success": False, "error": "file_not_found"}
 
-            # Fayl mavjudligini tekshirish
-            if not os.path.exists(file_path):
-                # Boshqa kengaytmani qidirish
-                for f in os.listdir(DOWNLOAD_DIR):
-                    if f.startswith(file_id):
-                        file_path = os.path.join(DOWNLOAD_DIR, f)
-                        break
+        size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        if size_mb > 50:
+            os.remove(file_path)
+            return {"success": False, "error": "too_large"}
 
-            if not os.path.exists(file_path):
-                return {"success": False, "error": "file_not_found"}
-
-            # Hajmini tekshirish (50MB)
-            size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            if size_mb > 50:
-                os.remove(file_path)
-                return {"success": False, "error": "too_large"}
-
-            return {
-                "success": True,
-                "file": file_path,
-                "platform": platform,
-                "size_mb": round(size_mb, 2),
-                "is_audio": quality == "mp3",
-            }
+        return {
+            "success": True,
+            "file": file_path,
+            "platform": platform,
+            "size_mb": round(size_mb, 2),
+            "is_audio": quality == "mp3",
+        }
 
     except yt_dlp.utils.DownloadError as e:
         return {"success": False, "error": str(e)}
@@ -118,10 +115,45 @@ def download_video(url: str, quality: str = None) -> dict:
         return {"success": False, "error": str(e)}
 
 
-def cleanup_file(file_path: str):
-    """Faylni o'chirish"""
+def get_video_info(url: str) -> dict:
+    """YouTube video ma'lumotlari va har bir sifat hajmini olish"""
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "nocheckcertificate": True,
+    }
     try:
-        if os.path.exists(file_path):
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        formats = {}
+        seen = {}
+        for f in info.get("formats", []):
+            h = f.get("height") or 0
+            size = f.get("filesize") or f.get("filesize_approx") or 0
+            size_mb = round(size / 1024 / 1024, 1) if size else 0
+
+            for limit, key in [(240, "240p"), (360, "360p"), (480, "480p"), (720, "720p"), (1080, "1080p")]:
+                if h <= limit and size_mb:
+                    if key not in seen or seen[key] < size_mb:
+                        seen[key] = size_mb
+                    break
+
+        for k, v in seen.items():
+            formats[k] = v
+
+        return {
+            "title": info.get("title", "YouTube video"),
+            "formats": formats,
+        }
+    except Exception:
+        return {"title": "YouTube video", "formats": {}}
+
+
+def cleanup_file(file_path: str):
+    try:
+        if file_path and os.path.exists(file_path):
             os.remove(file_path)
     except Exception:
         pass
