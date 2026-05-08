@@ -3,10 +3,9 @@
 #   Developer: @khojiakbar_khaydaraliyev
 # =============================================
 
-BOT_TOKEN = "8475743119:AAGN__eNUdS5v9Le9Zv8PES-GGB1fB_1vpQ"
-
+BOT_TOKEN = "8475743119:AAG7uMJ9XhI2kAGgapPql8sxR9ZK-ht_m5w"
 # Admin Telegram ID (o'zingiznikini yozing)
-ADMIN_IDS = [123456789]  # <-- o'zingizning Telegram ID ni qo'ying
+ADMIN_IDS = [6724172090]  # <-- o'zingizning Telegram ID ni qo'ying
 
 # Majburiy obuna kanali (hozircha o'chirilgan)
 # Yoqish uchun: REQUIRED_CHANNEL = "@grabzilla_channel" deb o'zgartiring
