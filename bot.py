@@ -15,25 +15,20 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import BOT_TOKEN, ADMIN_IDS, REQUIRED_CHANNEL
 from languages import t
 from database import init_db, add_user, get_user_lang, set_user_lang, log_download, get_stats
-from downloader import detect_platform, download_video, cleanup_file
+from downloader import detect_platform, download_video, cleanup_file, get_video_info
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Bot va Dispatcher
 bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# ─── FSM States ────────────────────────────────────────────────
 class DownloadStates(StatesGroup):
     waiting_quality = State()
 
 
-# ─── Yordamchi funksiyalar ──────────────────────────────────────
 def lang_keyboard():
-    """Til tanlash klaviaturasi"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🇺🇿 O'zbek", callback_data="lang_uz"),
@@ -43,25 +38,35 @@ def lang_keyboard():
     ])
 
 
-def quality_keyboard(lang: str):
-    """YouTube sifat tanlash klaviaturasi"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=t(lang, "q_360"), callback_data="q_360"),
-            InlineKeyboardButton(text=t(lang, "q_720"), callback_data="q_720"),
-        ],
-        [
-            InlineKeyboardButton(text=t(lang, "q_1080"), callback_data="q_1080"),
-            InlineKeyboardButton(text=t(lang, "q_mp3"), callback_data="q_mp3"),
-        ],
-        [
-            InlineKeyboardButton(text=t(lang, "back"), callback_data="q_cancel"),
-        ]
+def quality_keyboard(info: dict):
+    """YouTube sifat tanlash — hajm ko'rsatilgan"""
+    formats = info.get("formats", {})
+    buttons = []
+
+    row = []
+    for q, label, emoji in [("360p", "360p", "📱"), ("720p", "720p", "💻"), ("1080p", "1080p", "🖥")]:
+        size = formats.get(q, "")
+        size_txt = f" {size}MB" if size else ""
+        row.append(InlineKeyboardButton(
+            text=f"{emoji} {label}{size_txt}",
+            callback_data=f"q_{q.replace('p','')}"
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton(text="🎵 MP3 (faqat ovoz)", callback_data="q_mp3")
     ])
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Orqaga", callback_data="q_cancel")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def subscribe_keyboard(lang: str):
-    """Obuna klaviaturasi"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "subscribe_btn"), url=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}")],
         [InlineKeyboardButton(text=t(lang, "check_btn"), callback_data="check_sub")],
@@ -69,7 +74,6 @@ def subscribe_keyboard(lang: str):
 
 
 async def check_subscription(user_id: int) -> bool:
-    """Obunani tekshirish"""
     if not REQUIRED_CHANNEL:
         return True
     try:
@@ -79,12 +83,11 @@ async def check_subscription(user_id: int) -> bool:
         return True
 
 
-async def do_download(message: types.Message, url: str, quality: str = None, lang: str = "uz"):
+async def do_download(chat_id: int, user_id: int, url: str, quality: str = None, lang: str = "uz", reply_to: int = None):
     """Yuklab olish va yuborish"""
-    user_id = message.from_user.id
     platform = detect_platform(url)
 
-    msg = await message.answer(t(lang, "downloading"))
+    msg = await bot.send_message(chat_id, t(lang, "downloading"))
 
     result = await asyncio.get_event_loop().run_in_executor(
         None, download_video, url, quality
@@ -95,31 +98,33 @@ async def do_download(message: types.Message, url: str, quality: str = None, lan
     if not result["success"]:
         err = result.get("error", "")
         if "too_large" in err or err == "too_large":
-            await message.answer(t(lang, "too_large"))
+            await bot.send_message(chat_id, t(lang, "too_large"))
         elif err == "unsupported":
-            await message.answer(t(lang, "unsupported"))
+            await bot.send_message(chat_id, t(lang, "unsupported"))
         else:
-            await message.answer(t(lang, "error"))
+            await bot.send_message(chat_id, t(lang, "error"))
         logger.error(f"Download error: {err}")
         return
 
     file_path = result["file"]
     is_audio = result.get("is_audio", False)
+    size_mb = result.get("size_mb", 0)
+
+    caption = f"✅ <b>Grabzilla Bot</b>\n📦 Hajm: {size_mb} MB\n👨‍💻 @khojiakbar_khaydaraliyev"
 
     try:
-        await message.answer(t(lang, "success"))
         if is_audio:
             with open(file_path, "rb") as f:
-                await message.answer_audio(f)
+                await bot.send_audio(chat_id, f, caption=caption)
         else:
             with open(file_path, "rb") as f:
-                await message.answer_video(f)
+                await bot.send_video(chat_id, f, caption=caption)
 
         log_download(user_id, platform, url, quality or "best")
 
     except Exception as e:
         logger.error(f"Send error: {e}")
-        await message.answer(t(lang, "error"))
+        await bot.send_message(chat_id, t(lang, "error"))
     finally:
         cleanup_file(file_path)
 
@@ -158,7 +163,6 @@ async def cmd_stats(message: types.Message):
     await message.answer(t(lang, "stats", **stats))
 
 
-# Til tanlash callback
 @dp.callback_query(F.data.startswith("lang_"))
 async def cb_lang(callback: types.CallbackQuery):
     lang = callback.data.split("_")[1]
@@ -167,7 +171,6 @@ async def cb_lang(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# Obuna tekshirish callback
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(callback: types.CallbackQuery):
     lang = get_user_lang(callback.from_user.id)
@@ -178,7 +181,6 @@ async def cb_check_sub(callback: types.CallbackQuery):
         await callback.answer(t(lang, "not_subscribed"), show_alert=True)
 
 
-# YouTube sifat tanlash callback
 @dp.callback_query(F.data.startswith("q_"))
 async def cb_quality(callback: types.CallbackQuery, state: FSMContext):
     lang = get_user_lang(callback.from_user.id)
@@ -206,11 +208,17 @@ async def cb_quality(callback: types.CallbackQuery, state: FSMContext):
     quality = quality_map.get(quality_key, "720p")
     await callback.message.delete()
     await state.clear()
-    await do_download(callback.message, url, quality, lang)
+
+    await do_download(
+        chat_id=callback.message.chat.id,
+        user_id=callback.from_user.id,
+        url=url,
+        quality=quality,
+        lang=lang
+    )
     await callback.answer()
 
 
-# URL qabul qilish
 @dp.message(F.text)
 async def handle_url(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -218,11 +226,9 @@ async def handle_url(message: types.Message, state: FSMContext):
     lang = get_user_lang(user_id)
     url = message.text.strip()
 
-    # URL emasligini tekshirish
     if not url.startswith("http"):
         return
 
-    # Obuna tekshirish
     if REQUIRED_CHANNEL:
         ok = await check_subscription(user_id)
         if not ok:
@@ -238,21 +244,31 @@ async def handle_url(message: types.Message, state: FSMContext):
         await message.answer(t(lang, "unsupported"))
         return
 
-    # YouTube uchun sifat tanlash
     if platform == "youtube":
+        # Video ma'lumotlarini olish (hajm bilan)
+        wait_msg = await message.answer("⏳ Ma'lumot olinmoqda...")
+        info = await asyncio.get_event_loop().run_in_executor(
+            None, get_video_info, url
+        )
+        await wait_msg.delete()
+
+        title = info.get("title", "YouTube video")
         await state.set_state(DownloadStates.waiting_quality)
         await state.update_data(url=url)
         await message.answer(
-            t(lang, "choose_quality"),
-            reply_markup=quality_keyboard(lang)
+            f"🎬 <b>{title}</b>\n\n🎞 Sifatni tanlang:",
+            reply_markup=quality_keyboard(info)
         )
         return
 
-    # Boshqa platformalar
-    await do_download(message, url, lang=lang)
+    await do_download(
+        chat_id=message.chat.id,
+        user_id=user_id,
+        url=url,
+        lang=lang
+    )
 
 
-# ─── Main ──────────────────────────────────────────────────────
 async def main():
     init_db()
     logger.info("🦖 Grabzilla Bot ishga tushdi!")
